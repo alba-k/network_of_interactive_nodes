@@ -86,3 +86,6 @@ class ValidationManager(IBlockValidatorRole):
             logging.info(f'Consenso: TX {tx.tx_hash[:6]} aceptada en Mempool.')
 
         return is_new_tx
+    def get_public_key_map(self):
+        """Devuelve el mapa de claves públicas de forma segura."""
+        return self._public_key_map

@@ -2,24 +2,16 @@
 '''
 class BlockBuilder:
     Orquesta el ciclo de vida completo de la creación y minado de un Bloque (Proof-of-Work).
-    Implementa el proceso de minería.
+    Implementa el proceso de minería optimizado.
+
+    *** CORRECCIÓN: Usa object.__setattr__ para mutar DTOs congelados (frozen). ***
 
     Methods:
         build(index, transactions, previous_hash, bits) -> Block:
-            1. Extraer la lista de hashes de las transacciones.
-            2. Calcular el Merkle Root.
-            3. Calcular el Target de dificultad.
-            4. Iniciar el bucle de minería (PoW) con un timestamp.
-            5. En cada iteración:
-                a. Ensamblar DTO de Hashing con el nonce actual.
-                b. Calcular el hash del bloque.
-                c. Verificar si (hash_int <= target).
-            6. Si se encuentra el hash:
-                a. Ensamblar DTO de Creación.
-                b. Instanciar Bloque (via Factory).
-                c. Clonar el Bloque (usando 'replace') para añadir 'mining_time'.
-                d. Retornar el Bloque minado final.
-            7. Si se agota el nonce, lanzar una excepción.
+            1. Preparar datos estáticos (Merkle, Target).
+            2. Preparar DTO reutilizable.
+            3. Bucle de minería de alta velocidad (Update -> Hash -> Check).
+            4. Retornar bloque minado.
 '''
 
 import time
@@ -38,6 +30,9 @@ from core.utils.difficulty_utils import DifficultyUtils
 
 class BlockBuilder:
 
+    # Límite estándar de 4 bytes para el nonce (2^32 - 1)
+    MAX_NONCE: int = 4294967295 
+
     @staticmethod
     def build(
         index: int, 
@@ -47,28 +42,45 @@ class BlockBuilder:
     ) -> Block:
         
         start_time: float = time.time()
+        
+        # 1. Preparación de Datos Estáticos (Heavy lifting fuera del bucle)
         tx_hashes: List[str] = [tx.tx_hash for tx in transactions]
         merkle_root: str = MerkleRootCalculator.calculate(tx_hashes=tx_hashes)
         target: int = DifficultyUtils.bits_to_target(bits)
+        
         nonce: int = 0
         timestamp: int = int(time.time())
         
-        while nonce < 2**32:
+        # 2. Instanciación Única del DTO (Optimización de Memoria)
+        hashing_dto: BlockHashingData = BlockHashingData(
+            index = index,
+            timestamp = timestamp,
+            previous_hash = previous_hash, 
+            bits = bits,
+            merkle_root = merkle_root, 
+            nonce = nonce
+        )
         
-            hashing_dto: BlockHashingData = BlockHashingData(
-                index = index,
-                timestamp = timestamp,
-                previous_hash = previous_hash, 
-                bits = bits,
-                merkle_root = merkle_root, 
-                nonce = nonce
-            )
+        # 3. Bucle de Minería Optimizado
+        while nonce < BlockBuilder.MAX_NONCE:
+        
+            # -----------------------------------------------------------------
+            # [FIX READ-ONLY ERROR]
+            # Como BlockHashingData es 'frozen=True', no podemos hacer .nonce = ...
+            # Usamos object.__setattr__ para saltarnos esa restricción SOLO AQUÍ
+            # por razones de rendimiento crítico.
+            # -----------------------------------------------------------------
+            object.__setattr__(hashing_dto, 'nonce', nonce)
             
+            # Cálculo del Hash (Usa struct binario internamente)
             block_hash: str = BlockHasher.calculate(hashing_dto)
             
+            # Verificación de Dificultad
             if int(block_hash, 16) <= target:
                 
+                # ¡Éxito! Bloque encontrado.
                 duration: float = time.time() - start_time
+                
                 creation_params: BlockCreationParams = BlockCreationParams(
                     index = index, 
                     transactions = transactions,
@@ -79,8 +91,13 @@ class BlockBuilder:
                 )
                 
                 mined_block: Block = BlockFactory.create(creation_params)
-                final_block = replace(mined_block, mining_time = round(duration, 4)
-                )
+                
+                # Agregamos metadatos de rendimiento
+                final_block = replace(mined_block, mining_time = round(duration, 4))
+                
                 return final_block
+            
+            # Siguiente intento
             nonce += 1
+            
         raise RuntimeError(f'Fallo de minería: Nonce agotado para el bloque {index}.')

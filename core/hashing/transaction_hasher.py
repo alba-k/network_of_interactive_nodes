@@ -3,37 +3,48 @@
 class TransactionHasher:
     Contiene la lógica pura para hashear una Transaction.
 
+    *** OPTIMIZACIÓN: Usa Binario (struct) en lugar de JSON para máximo rendimiento. ***
+
     Methods:
         calculate(dto: TransactionHashingData) -> str: Calcula un hash SHA-256 determinista.
-            1. Extraer la lista de hashes (data_hash) de cada DataEntry en el DTO.
-            2. Crear un diccionario con la lista de hashes y el timestamp.
-            3. Serializar el diccionario a un string JSON (con sort_keys=True).
-            4. Codificar el string JSON a bytes (utf-8).
-            5. Crear un objeto hash SHA-256 pasándole los bytes del JSON.
-            6. Obtener el hash final (hexdigest) y retornarlo.
+            1. Empaquetar Timestamp (8 bytes).
+            2. Convertir y concatenar los hashes de las entradas (raw bytes).
+            3. Calcular SHA-256 sobre el buffer binario resultante.
+            4. Retornar el hash final hexadecimal.
 '''
 
-import json
-from hashlib import sha256
-from typing import Any
+import struct
+import hashlib
+from binascii import unhexlify
 
 # Importaciones de la arquitectura
 from core.dto.transaction_hashing_data import TransactionHashingData
 
 class TransactionHasher:
 
+    # Formato para el Timestamp (Double Float - Little Endian)
+    _TIMESTAMP_FORMAT: str = '<d'
+
     @staticmethod
-    def calculate( dto: TransactionHashingData) -> str:
+    def calculate(dto: TransactionHashingData) -> str:
+        
+        # 1. Iniciar el payload con el Timestamp (8 bytes)
+        payload: bytes = struct.pack(TransactionHasher._TIMESTAMP_FORMAT, float(dto.timestamp))
 
-        entries_hashes: list[str] = [entry.data_hash for entry in dto.entries]
+        # 2. Concatenar los hashes de las entradas (DataEntries)
+        # Convertimos de Hex String (64 chars) a Raw Bytes (32 bytes) para ahorrar espacio y CPU
+        for entry in dto.entries:
+            try:
+                # Asumimos que data_hash es un hex válido SHA256
+                entry_bytes = unhexlify(entry.data_hash)
+                payload += entry_bytes
+            except Exception:
+                # Si el hash de la entrada está corrupto, lo tratamos como ceros (Defensivo)
+                # Esto asegura que el hasher no rompa el flujo, aunque la TX será inválida después.
+                payload += b'\x00' * 32
 
-        tx_dict: dict[str, Any] = {
-            'entries_hashes': entries_hashes,
-            'timestamp': dto.timestamp
-        }
-
-        tx_json_str: str = json.dumps(tx_dict, sort_keys=True)
-        tx_json_bytes: bytes = tx_json_str.encode('utf-8')
-        hash_object = sha256(tx_json_bytes)
+        # 3. Hashing SHA-256 puro sobre el buffer binario
+        hash_object = hashlib.sha256(payload)
         hex_digest: str = hash_object.hexdigest()
+        
         return hex_digest

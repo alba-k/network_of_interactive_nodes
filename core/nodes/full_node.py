@@ -93,6 +93,10 @@ class FullNode:
         logging.info('Full Node detenido.')
 
     # --- Getters ---
+
+    def get_consensus_manager(self):
+        return self._consensus_manager
+
     def get_p2p_manager(self) -> P2PManager:
         return self._p2p_manager
 

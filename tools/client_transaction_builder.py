@@ -1,8 +1,11 @@
+# tools/client_transaction_builder.py
 '''
 Script: tools/client_transaction_builder.py
 ----------------------------------------------------------------------
 Propósito: Simulación del CLIENTE (ESP32/Mobile).
 Responsabilidad: Actuar como raíz de composición para los servicios del cliente.
+
+*** CORRECCIÓN: Retorna objeto Response completo para validación HTTP. ***
 ----------------------------------------------------------------------
 '''
 
@@ -12,6 +15,7 @@ import base64
 import logging
 import sys
 import os
+from typing import Optional
 
 # 1. Truco para importar la librería 'core' y 'identity'
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -41,6 +45,7 @@ class ClientTransactionBuilder:
         self._signer = SoftwareSigner(private_key) 
         
         # 3. Composición: Crear el Wallet Manager
+        # El WalletManager usará internamente el TransactionBuilder actualizado del Core
         self._wallet_manager = WalletManager(private_key.public_key(), self._signer) 
 
         self._api_endpoint = api_endpoint
@@ -69,16 +74,21 @@ class ClientTransactionBuilder:
         data_entry = DataEntryFactory.create(entry_params)
         
         # 3. Firmar la TX
+        # Esto delegará al TransactionBuilder.build() del Core, que ya usa 
+        # Firmas Deterministas y Hashing Binario. ¡Todo sincronizado!
         final_tx = self._wallet_manager.create_and_sign_data([data_entry])
             
         logging.info(f"TX firmada localmente: {final_tx.tx_hash[:6]}")
         return final_tx
 
-    def submit_transaction(self, signed_tx: Transaction, api_url: str):
+    def submit_transaction(self, signed_tx: Transaction, api_url: str) -> Optional[requests.Response]:
+        '''
+        Envía la transacción al Gateway.
+        Retorna el objeto Response crudo para que el BaseClient verifique el status_code.
+        '''
         
-        # --- CORRECCIÓN: CONVERTIR A STRING (HEX) ---
-        # Usamos el serializer que transforma los bytes internos en strings hexadecimales
-        # para que JSON no se queje.
+        # 1. Serializar a Diccionario (Hex Strings)
+        # Vital para que requests pueda convertirlo a JSON sin error de "bytes is not serializable"
         tx_data_dict = TransactionSerializer.to_dict(signed_tx)
         
         # 2. Crear el DTO de envío
@@ -91,26 +101,28 @@ class ClientTransactionBuilder:
                 json=submission_payload,
                 timeout=5
             )
-            response.raise_for_status()
-            logging.info(f"TX enviada. Respuesta del Gateway: {response.json().get('status')}")
-            return response.json()
+            return response
+            
         except requests.exceptions.RequestException as e:
             logging.error(f"Fallo de conexión al Gateway: {e}")
-            raise
+            return None
 
-# ... (El bloque if __name__ == "__main__": se mantiene igual) ...
+# ... (El bloque if __name__ == "__main__": se mantiene igual para pruebas aisladas) ...
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
     client = ClientTransactionBuilder(key_file_path='mi_billetera.pem')
     
     sensor_data = "40.5 C"
     raw_submission = DataSubmission(
-        source_id=client.get_address(), # Usamos el getter
+        source_id=client.get_address(), 
         data_type="TEMPERATURA",
         value=base64.b64encode(sensor_data.encode('utf-8')).decode('utf-8'),
         nonce=int(time.time()),
         metadata={"unit": "C"}
     )
     
-    final_tx = client.build_and_sign_transaction(raw_submission)
-    logging.info(f"Cliente (ESP32) ha completado la firma local para {final_tx.tx_hash[:6]}.")
+    try:
+        final_tx = client.build_and_sign_transaction(raw_submission)
+        logging.info(f"Prueba de firma local exitosa: {final_tx.tx_hash[:6]}")
+    except Exception as e:
+        logging.error(f"Error en prueba local: {e}")

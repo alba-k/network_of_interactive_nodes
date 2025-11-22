@@ -29,14 +29,16 @@ class Blockchain:
     
     @property
     def chain(self) -> List[Block]:
+        # Retornamos una copia para proteger la lista interna
         return list(self._chain) 
     
     def add_block_forced(self, block: Block) -> None:
         self._chain.append(block)
 
     def replace_chain(self, new_chain: List[Block]) -> None:
-            '''
-            Reemplaza la cadena actual por una nueva.
-            Usado por el sistema de persistencia al cargar desde disco.
-            '''
-            self._chain = list(new_chain)
+        '''
+        Reemplaza la cadena actual por una nueva.
+        Usado por el sistema de persistencia al cargar desde disco.
+        '''
+        # Aquí es donde ocurre la "magia" de la persistencia
+        self._chain = list(new_chain)

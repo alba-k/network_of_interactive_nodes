@@ -3,19 +3,21 @@
 Class TransactionSigner:
     Contiene la lógica pura para firmar un hash de transacción usando el esquema ECDSA (Curva NIST P-256).
 
+    *** ACTUALIZACIÓN: Implementa Firmas Deterministas (RFC 6979) y manejo eficiente de bytes. ***
+
     Methods:
         sign(private_key: EccKey, tx_hash: str) -> str: Firma un hash de transacción.
-            1. Hashear el hash de la transacción (tx_hash) con SHA-256.
-            2. Crear un firmador ECDSA (DSS) con la clave privada.
-            3. Firmar el hash SHA-256 resultante.
-            4. Convertir la firma (bytes) a un string hexadecimal.
-            5. Retornar el string hexadecimal.
+            1. Convertir el hash hex a bytes crudos.
+            2. Crear objeto Hash (SHA256) sobre los bytes crudos.
+            3. Crear firmador Determinista (RFC 6979).
+            4. Firmar.
+            5. Retornar firma en hex.
 '''
 
 from Crypto.PublicKey.ECC import EccKey
 from Crypto.Signature import DSS
 from Crypto.Hash import SHA256
-from binascii import hexlify
+from binascii import hexlify, unhexlify
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -29,8 +31,24 @@ class TransactionSigner:
     @staticmethod
     def sign(private_key: EccKeyType, tx_hash: str) -> str: 
         
-        hash_obj = SHA256.new(tx_hash.encode('utf-8'))
-        signer = DSS.new(private_key, 'fips-186-3')  # type: ignore
+        # 1. Eficiencia: Convertir el Hex String (64 chars) a Bytes crudos (32 bytes)
+        # Esto es más estándar que hashear la representación string utf-8.
+        try:
+            raw_hash_bytes = unhexlify(tx_hash)
+        except Exception:
+            # Fallback defensivo por si acaso llega algo que no es hex puro
+            raw_hash_bytes = tx_hash.encode('utf-8')
+
+        # 2. Preparar el objeto Hash para PyCryptodome
+        # Hasheamos los datos una vez más antes de firmar (Doble Hash implícito en el flujo)
+        hash_obj = SHA256.new(raw_hash_bytes)
+        
+        # 3. Seguridad: Usar RFC 6979 (Determinista)
+        # Elimina la dependencia de un RNG (Generador de números aleatorios) fuerte.
+        # Si firmas lo mismo 2 veces, obtienes la misma firma.
+        signer = DSS.new(private_key, 'deterministic-rfc6979') # type: ignore
+        
         signature_bytes: bytes = signer.sign(hash_obj)
         signature_hex: str = hexlify(signature_bytes).decode('utf-8')
+        
         return signature_hex

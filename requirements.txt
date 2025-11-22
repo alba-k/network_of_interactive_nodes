@@ -27,3 +27,5 @@ click==8.1.7
 pytest==7.4.2
 # Herramienta para medir la cobertura de las pruebas
 pytest-cov==4.1.0
+
+mnemonic==0.21

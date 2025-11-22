@@ -9,7 +9,6 @@ Permite al usuario:
 
 import sys
 import os
-import logging
 
 # Ajuste de path para importar 'identity'
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))

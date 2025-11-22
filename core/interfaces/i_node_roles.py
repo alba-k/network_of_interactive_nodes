@@ -66,11 +66,6 @@ class IBlockValidatorRole(ABC):
     def validate_tx_rules(self, tx: Transaction) -> bool:
         pass
 
-class IMinerRole(ABC):
-    @abstractmethod
-    def create_new_block(self) -> Block:
-        pass
-
 class IWalletRole(ABC):
     @abstractmethod
     def create_and_sign_data(self, entries: List[DataEntry]) -> Transaction:
@@ -83,4 +78,9 @@ class IAPIRole(ABC):
 
     @abstractmethod
     def stop_api_server(self):
+        pass
+
+class IMinerRole(ABC):
+    @abstractmethod
+    def create_new_block(self, index: int, transactions: List[Transaction], prev_hash: str, bits: int) -> Block:
         pass
