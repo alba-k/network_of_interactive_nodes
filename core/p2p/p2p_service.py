@@ -48,11 +48,12 @@ class P2PService:
             1. Bucle principal de escucha
             2. Leer el header (tamaño fijo)
             3. Pre-parsear el header (solo para obtener el tamaño)
-            4. Leer el payload (tamaño variable)
-            5. Combinar header + payload
-            6. Deserializar el paquete completo
-            7. Pasar el mensaje al Nodo (capa superior)
-            8. Manejar desconexión y limpiar
+            4. **Validar tamaño contra NetworkConfig.MAX_PAYLOAD_SIZE**
+            5. Leer el payload (tamaño variable)
+            6. Combinar header + payload
+            7. Deserializar el paquete completo
+            8. Pasar el mensaje al Nodo (capa superior)
+            9. Manejar desconexión y limpiar
 
         get_peer(peer_id): Retorna un objeto Peer si está conectado.
 
@@ -76,6 +77,9 @@ from core.p2p.peer import Peer
 from core.p2p.p2p_message_serializer import P2PMessageSerializer
 from core.p2p.p2p_message_deserializer import P2PMessageDeserializer  
 from core.p2p.message import Message 
+
+# Importacion de la configuracion
+from config import Config
 
 class P2PService:
 
@@ -162,9 +166,14 @@ class P2PService:
                 try:
                     _command, payload_size, _checksum = struct.unpack(P2PMessageSerializer.HEADER_FORMAT, header_data)
                 except struct.error:
-                    logging.warning(f'Error P2P: Header corrupto de {peer_id}.')
+                    logging.warning(f'Error P2P: Header corrupto de {peer_id}. Desconectando.')
                     break
-                    
+                
+                # Usamos Config.NETWORK_MAX_PAYLOAD_SIZE en lugar de NetworkConfig directo
+                if payload_size > Config.NETWORK_MAX_PAYLOAD_SIZE:
+                    logging.warning(f'SEGURIDAD P2P: Par {peer_id} excedió límite de configuración ({payload_size} bytes). Desconectando.')
+                    break
+
                 payload_data = await peer.reader.readexactly(payload_size)
                 full_packet = header_data + payload_data
                 
@@ -176,11 +185,14 @@ class P2PService:
                     logging.warning(f'Error P2P: Mensaje corrupto de {peer_id}. {e}')
                     
         except (asyncio.IncompleteReadError, ConnectionResetError):
-            logging.info(f'Par {peer_id} desconectado.')
+            logging.info(f'Par {peer_id} desconectado (Fin de stream).')
+        except Exception as e:
+            logging.error(f'Error inesperado en conexión con {peer_id}: {e}')
         finally:
             self._peers.pop(peer_id, None)
             if not peer.writer.is_closing():
-                peer.writer.close(); await peer.writer.wait_closed()
+                peer.writer.close()
+                await peer.writer.wait_closed()
 
     def get_peer(self, peer_id: str) -> Peer | None:
         return self._peers.get(peer_id)
@@ -188,12 +200,12 @@ class P2PService:
     async def send_message(self, peer: Peer, command: str, payload_dto: Any):
         try:
             message_bytes = P2PMessageSerializer.serialize(command, payload_dto)
-            peer.writer.write(message_bytes); await peer.writer.drain()
+            peer.writer.write(message_bytes)
+            await peer.writer.drain()
             
         except (OSError, BrokenPipeError) as e:
             logging.warning(f'Error P2P: No se pudo enviar mensaje a {peer.host}. {e}')
 
     async def broadcast(self, command: str, payload_dto: Any):
-        
         for peer in self._peers.values():
             await self.send_message(peer, command, payload_dto)

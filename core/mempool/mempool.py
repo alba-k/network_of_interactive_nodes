@@ -2,82 +2,109 @@
 '''
 class Mempool:
     Gestiona la colección de transacciones pendientes (no minadas).
+    Implementa políticas de retención, limpieza y límites de seguridad usando Config.
+
+    *** ACTUALIZACIÓN: Usa core.config.Config y añade protección DoS por tamaño máximo. ***
 
     Attributes:
-        _pending_transactions (Dict[str, Transaction]): 
-            Un diccionario (mapa) que almacena las transacciones pendientes.
-            
-        _lock (threading.Lock): 
-            Un candado (lock) que previene problemas de concurrencia.
-
-    Methods:
-        __init__(): 
-            Inicializa el Mempool (crea el dict y el lock).
-            
-        add_transaction(transaction) -> bool: Añade una transacción al mempool de forma segura.
-            1. Adquirir el lock.
-            2. Obtener el hash de la TX.
-            3. Verificar si el hash ya existe en el dict.
-            4. Si existe, retornar False (no se añadió).
-            5. Si no existe, añadir la TX al dict.
-            6. Liberar el lock (automático con 'with').
-            7. Retornar True (se añadió).
-            
-        get_transactions_for_block(max_count) -> List[Transaction]: Obtiene la lista de transacciones con mayor prioridad.
-            1. Adquirir el lock.
-            2. Obtener todos los valores (TXs) del dict y convertirlos a lista.
-            3. Ordenar la lista de TXs por 'fee_rate' (de mayor a menor).
-            4. Retornar la sub-lista (desde el inicio hasta 'max_count').
-            5. Liberar el lock.
-
-        remove_mined_transactions(mined_transactions): Limpia el mempool eliminando transacciones que ya fueron minadas.
-            1. Adquirir el lock.
-            2. Iterar sobre la lista de TXs minadas.
-            3. Usar 'pop(tx.tx_hash, None)' para eliminar cada TX del dict.
-            4. Liberar el lock.
-            
-        have_transaction(tx_hash) -> bool: (Helper P2P) Revisa (con lock) si un hash ya existe.
-            
-        get_transaction(tx_hash) -> Optional[Transaction]: (Helper P2P) Obtiene (con lock) una TX por su hash.
-            
-        get_transaction_count() -> int: (Helper) Retorna el número de TXs pendientes (de forma segura).
+        _pending_transactions (Dict[str, Transaction]): Mapa Hash -> TX.
+        _arrival_times (Dict[str, float]): Mapa Hash -> Timestamp llegada.
+        _lock (threading.Lock): Candado para concurrencia.
 '''
 
 from typing import List, Dict, Optional
-from core.models.transaction import Transaction
+import time
 import threading
 import logging
 
+# Importaciones de Modelos
+from core.models.transaction import Transaction
+
+# --- IMPORTACIÓN DE CONFIGURACIÓN ---
+from config import Config
+
 class Mempool:
-    
+
     def __init__(self):
         self._pending_transactions: Dict[str, Transaction] = {}
+        self._arrival_times: Dict[str, float] = {} 
         self._lock = threading.Lock()
-        logging.info('Mempool inicializada.')
+        logging.info(f'Mempool inicializada. Límite: {Config.MEMPOOL_MAX_SIZE} TXs. Expiración: {Config.MEMPOOL_EXPIRY_SEC}s')
 
     def add_transaction(self, transaction: Transaction) -> bool:
         with self._lock:
             tx_hash: str = transaction.tx_hash
+
+            # 1. Verificar duplicados
             if tx_hash in self._pending_transactions:
                 return False
+
+            # -----------------------------------------------------------------
+            # [FIX SEGURIDAD] Límite de Memoria (DoS Protection)
+            # Si la mempool está llena, rechazamos nuevas transacciones
+            # para evitar que el nodo colapse por falta de RAM.
+            # -----------------------------------------------------------------
+            if len(self._pending_transactions) >= Config.MEMPOOL_MAX_SIZE:
+                logging.warning(f"Mempool: Rechazada TX {tx_hash[:6]}. Pool lleno ({Config.MEMPOOL_MAX_SIZE} TXs).")
+                return False
+
+            # 2. Almacenar la transacción
             self._pending_transactions[tx_hash] = transaction
+
+            # 3. Registrar el tiempo de llegada
+            self._arrival_times[tx_hash] = time.time()
+
             return True
 
     def get_transactions_for_block(self, max_count: int = 10) -> List[Transaction]:
         with self._lock:
+            # Nota: Sigue pendiente la optimización de ordenamiento (heapq),
+            # pero mantenemos la lógica original por estabilidad ahora.
             all_txs: List[Transaction] = list(self._pending_transactions.values())
-            
+
             sorted_txs: List[Transaction] = sorted(
-                all_txs, 
-                key = lambda tx: tx.fee_rate, 
+                all_txs,
+                key = lambda tx: tx.fee_rate,
                 reverse = True
             )
+
             return sorted_txs[:max_count]
 
     def remove_mined_transactions(self, mined_transactions: List[Transaction]):
         with self._lock:
             for tx in mined_transactions:
-                self._pending_transactions.pop(tx.tx_hash, None)
+                if tx.tx_hash in self._pending_transactions:
+                    del self._pending_transactions[tx.tx_hash]
+
+                if tx.tx_hash in self._arrival_times:
+                    del self._arrival_times[tx.tx_hash]
+
+    def prune_expired_transactions(self) -> int:
+        '''
+        Limpia transacciones que han estado esperando más tiempo del permitido en Config.
+        '''
+        with self._lock:
+            now = time.time()
+            expired_hashes: List[str] = []
+
+            for tx_hash, arrival_time in self._arrival_times.items():
+                age = now - arrival_time
+                
+                # Usamos la configuración centralizada en lugar del valor hardcodeado
+                if age > Config.MEMPOOL_EXPIRY_SEC:
+                    expired_hashes.append(tx_hash)
+
+            for tx_hash in expired_hashes:
+                if tx_hash in self._pending_transactions:
+                    del self._pending_transactions[tx_hash]
+
+                if tx_hash in self._arrival_times:
+                    del self._arrival_times[tx_hash]
+
+            if expired_hashes:
+                logging.info(f"Mempool: Purga realizada. {len(expired_hashes)} TXs expiradas eliminadas.")
+
+            return len(expired_hashes)
 
     def have_transaction(self, tx_hash: str) -> bool:
         with self._lock:

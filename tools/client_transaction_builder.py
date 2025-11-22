@@ -1,9 +1,7 @@
 '''
 Script: tools/client_transaction_builder.py
 ----------------------------------------------------------------------
-Propósito: Simulación del CLIENTE (ESP32/Mobile). Demuestra el flujo de 
-           generación de datos, firma LOCAL y envío a la API del Gateway.
-
+Propósito: Simulación del CLIENTE (ESP32/Mobile).
 Responsabilidad: Actuar como raíz de composición para los servicios del cliente.
 ----------------------------------------------------------------------
 '''
@@ -14,7 +12,6 @@ import base64
 import logging
 import sys
 import os
-import dataclasses
 
 # 1. Truco para importar la librería 'core' y 'identity'
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -23,10 +20,13 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from core.managers.wallet_manager import WalletManager 
 from core.client_services.software_signer import SoftwareSigner 
 from core.dto.api.data_submission import DataSubmission
-from core.dto.data_entry_creation_params import DataEntryCreationParams # <--- CORREGIDO
+from core.dto.data_entry_creation_params import DataEntryCreationParams
 from core.factories.data_entry_factory import DataEntryFactory
 from core.models.transaction import Transaction 
 from identity.key_persistence import KeyPersistence 
+
+# --- IMPORTACIÓN CLAVE: El Serializador que convierte Bytes -> Str ---
+from core.serializers.transaction_serializer import TransactionSerializer
 
 class ClientTransactionBuilder:
 
@@ -37,29 +37,28 @@ class ClientTransactionBuilder:
         # 1. Cargar la clave privada (Persistencia)
         private_key = KeyPersistence.ensure_key_exists(key_file_path)
         
-        # 2. Composición: Crear el Adaptador de Firma (Polimorfismo)
+        # 2. Composición: Crear el Adaptador de Firma
         self._signer = SoftwareSigner(private_key) 
         
-        # 3. Composición: Crear el Wallet Manager (Lógica de Address/TX)
+        # 3. Composición: Crear el Wallet Manager
         self._wallet_manager = WalletManager(private_key.public_key(), self._signer) 
 
         self._api_endpoint = api_endpoint
-        # La dirección se obtiene a través del gestor, no se almacena como atributo interno
+        self._address = self._wallet_manager.get_address()
         
-        logging.info(f"Cliente listo. Dirección: {self._wallet_manager.get_address()}")
+        logging.info(f"Cliente listo. Dirección: {self._address}")
 
-    # --- Nuevo Getter (Soluciona el error de la imagen) ---
     def get_address(self) -> str:
-        '''Expone la dirección pública del wallet de forma controlada.'''
-        return self._wallet_manager.get_address()
+        return self._address
 
-    # --- Lógica de Negocio (El Corazón del Cliente) ---
+    # --- Lógica de Negocio ---
 
     def build_and_sign_transaction(self, submission: DataSubmission) -> Transaction:
+        
         # 1. Decodificar el dato (value) de Base64 a bytes.
         value_bytes = base64.b64decode(submission.value) 
         
-        # 2. Construir el DataEntry (Átomo de la transacción).
+        # 2. Construir el DataEntry
         entry_params = DataEntryCreationParams(
             source_id=submission.source_id,
             data_type=submission.data_type,
@@ -69,20 +68,23 @@ class ClientTransactionBuilder:
         )
         data_entry = DataEntryFactory.create(entry_params)
         
-        # 3. Firmar la TX (Delegamos al WalletManager, que usará el SoftwareSigner).
+        # 3. Firmar la TX
         final_tx = self._wallet_manager.create_and_sign_data([data_entry])
             
         logging.info(f"TX firmada localmente: {final_tx.tx_hash[:6]}")
         return final_tx
 
     def submit_transaction(self, signed_tx: Transaction, api_url: str):
-        # 1. Serializar la Transacción Firmada a un diccionario (JSON-friendly).
-        tx_data_dict = dataclasses.asdict(signed_tx)
         
-        # 2. Crear el DTO de envío para el Gateway.
+        # --- CORRECCIÓN: CONVERTIR A STRING (HEX) ---
+        # Usamos el serializer que transforma los bytes internos en strings hexadecimales
+        # para que JSON no se queje.
+        tx_data_dict = TransactionSerializer.to_dict(signed_tx)
+        
+        # 2. Crear el DTO de envío
         submission_payload = {'tx_data': tx_data_dict} 
         
-        # 3. Enviar vía HTTP (Usando el endpoint /submit_signed_tx).
+        # 3. Enviar vía HTTP
         try:
             response = requests.post(
                 f'{api_url}/submit_signed_tx',
@@ -96,35 +98,19 @@ class ClientTransactionBuilder:
             logging.error(f"Fallo de conexión al Gateway: {e}")
             raise
 
-# --- EJEMPLO DE USO (El "firmware" ejecutándose) ---
-
+# ... (El bloque if __name__ == "__main__": se mantiene igual) ...
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
-    
-    # 1. Inicializar el Cliente Constructor (Composition Root)
     client = ClientTransactionBuilder(key_file_path='mi_billetera.pem')
     
-    # 2. El ESP32 toma una lectura (ej. temperatura)
     sensor_data = "40.5 C"
-    
-    # 3. Construye el DTO de datos (Lo que genera el ESP32)
     raw_submission = DataSubmission(
-        # CORREGIDO: Usamos el método getter
-        source_id=client.get_address(), 
+        source_id=client.get_address(), # Usamos el getter
         data_type="TEMPERATURA",
         value=base64.b64encode(sensor_data.encode('utf-8')).decode('utf-8'),
         nonce=int(time.time()),
         metadata={"unit": "C"}
     )
     
-    # 4. Construir y Firmar la Transacción (Todo ocurre en el dispositivo cliente)
     final_tx = client.build_and_sign_transaction(raw_submission)
-    
     logging.info(f"Cliente (ESP32) ha completado la firma local para {final_tx.tx_hash[:6]}.")
-    
-    # 5. Enviar la Transacción Firmada al Servidor Gateway (API)
-    # Nota: Descomentar la siguiente sección para probar si el GatewayNode está corriendo en el puerto 8000
-    # try:
-    #     client.submit_transaction(final_tx, client._api_endpoint)
-    # except Exception:
-    #     logging.error("No se pudo enviar la TX. Asegúrese de que el GatewayNode esté activo en 127.0.0.1:8000.")

@@ -23,7 +23,7 @@ class DifficultyUtils:
 class DifficultyUtils:
 
     # Es 0x1d00ffff en formato 'bits'
-    MAX_TARGET: int = 0x00000000FFFF0000000000000000000000000000000000000000000000000000
+    MAX_TARGET: int = 0x00FFFF0000000000000000000000000000000000000000000000000000000000
 
     @staticmethod
     def bits_to_target(bits: str) -> int:

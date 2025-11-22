@@ -10,6 +10,7 @@ class Blockchain:
         last_block(property) ->    Optional[Block]:   Retorna el último bloque.
         chain (Property) ->        List[Block]:       Retorna una copia de la cadena.
         add_block_forced(block) -> None:              Añade un bloque (sin validación).
+        replace_chain(new_chain) -> None:             Reemplaza toda la cadena.
 '''
 
 from typing import List, Optional
@@ -32,3 +33,10 @@ class Blockchain:
     
     def add_block_forced(self, block: Block) -> None:
         self._chain.append(block)
+
+    def replace_chain(self, new_chain: List[Block]) -> None:
+            '''
+            Reemplaza la cadena actual por una nueva.
+            Usado por el sistema de persistencia al cargar desde disco.
+            '''
+            self._chain = list(new_chain)

@@ -5,7 +5,7 @@ class BlockValidator:
 
     Methods:
         verify(block: Block) -> bool:
-            1. Verificar Timestamp.
+            1. Verificar Timestamp (usando tolerancia de Config).
             2. Ensamblar DTO de Hashing (BlockHashingData) con datos del bloque.
             3. Recalcular el hash.
             4. Verificar integridad.
@@ -17,7 +17,10 @@ class BlockValidator:
 
 import time
 
-# Importaciones de la Arquitectura
+# --- Importación de Configuración Centralizada ---
+from config import Config
+
+# --- Importaciones de la Arquitectura ---
 from core.models.block import Block
 from core.hashing.block_hasher import BlockHasher
 from core.dto.block_hashing_data import BlockHashingData
@@ -28,7 +31,11 @@ class BlockValidator:
 
     @staticmethod
     def verify(block: Block) -> bool: 
-        max_allowed_timestamp = time.time() + 7200 # 2 horas
+        
+        # Validación de Tiempo Futuro (Drift Tolerance)
+        # Usamos la configuración centralizada (ej. 7200 seg = 2 horas)
+        max_allowed_timestamp: float = time.time() + Config.BLOCK_MAX_FUTURE_TIME_SEC
+        
         if block.timestamp > max_allowed_timestamp:
             return False
             

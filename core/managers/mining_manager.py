@@ -1,55 +1,18 @@
 # network_of_interactive_nodes/core/managers/mining_manager.py
-'''
-class MiningManager(IMinerRole):
-    Implementa el "Software de Minería". 
-    
-    Es un Gestor (Capa 2) que corre en paralelo al FullNode. 
-    No es un nodo por sí mismo; parasita al FullNode para obtener recursos (Mempool, Blockchain)
-    y para propagar su trabajo (P2P).
-
-    Attributes:
-        _miner_address (str): Dirección (ID) donde se pagará la recompensa (Coinbase).
-        _full_node (FullNode): Referencia al nodo anfitrión (para acceder a sus gestores).
-        _mining_task (Task): La tarea asíncrona que mantiene el bucle de minería.
-
-    Methods:
-        start_mining(): 
-            Inicia la tarea de fondo (_mine_loop).
-            
-        stop_mining(): 
-            Cancela la tarea de fondo y espera su cierre.
-            
-        _mine_loop(interval_seconds): (Bucle Infinito)
-            1. Verifica si el Mempool tiene transacciones (usando _full_node.get_mempool()).
-            2. Si hay trabajo, llama a create_new_block().
-            3. Intenta validar el bloque generado localmente (usando _full_node.get_validation_manager()).
-            4. Si es válido, lo propaga a la red (usando _full_node.get_p2p_manager()).
-
-        create_new_block() -> Block: (Implementación de IMinerRole)
-            Orquesta la construcción del bloque usando el Núcleo Estático.
-            1. Crea la transacción Coinbase.
-            2. Selecciona transacciones del Mempool.
-            3. Obtiene el último bloque y calcula la dificultad ('bits').
-            4. Ejecuta el PoW (BlockBuilder.build).
-            
-        _create_coinbase_tx() -> Transaction: (Helper)
-            Crea la transacción especial que genera nuevas monedas.
-            1. Crea un DataEntry con texto arbitrario (nonce/extra-nonce).
-            2. Crea la Transacción sin firma (input vacío).
-'''
 
 import logging
 import asyncio
 import time
-from typing import Optional
+from typing import Optional, List, Any # Agregamos Any para flexibilidad
+from concurrent.futures import ProcessPoolExecutor
 
 # Interfaces 
 from core.interfaces.i_node_roles import IMinerRole
 
 # Modelos y Nodo 
 from core.nodes.full_node import FullNode
-from core.models.block import Block
 from core.models.transaction import Transaction
+from core.models.block import Block 
 
 # Núcleo Estático (Herramientas) 
 from core.builders.block_builder import BlockBuilder
@@ -61,15 +24,30 @@ from core.utils.transaction_utils import TransactionUtils
 from core.dto.transaction_creation_params import TransactionCreationParams
 from core.dto.data_entry_creation_params import DataEntryCreationParams
 
+# Configuración
+from config import Config
+
 class MiningManager(IMinerRole):
 
     def __init__(self, miner_address: str, full_node: FullNode):
-        
         self._miner_address = miner_address
-        self._full_node = full_node # Conexión al "Cerebro" del Nodo
+        self._full_node = full_node
         self._mining_task: Optional[asyncio.Task[None]] = None
-        
-        logging.info("Mining Manager (Software de Minería) preparado.")
+        self._executor = ProcessPoolExecutor(max_workers=1)
+        logging.info("Mining Manager (Multiprocess) preparado.")
+
+    # --------------------------------------------------------------------------
+    # CORRECCIÓN: Ajuste de Tipos para coincidir con IMinerRole y BlockBuilder
+    # --------------------------------------------------------------------------
+    def create_new_block(self, index: int, transactions: List[Transaction], prev_hash: str, bits: Any) -> Block:
+        """
+        Implementación de IMinerRole.
+        Nota: Usamos 'bits: Any' o 'bits: str' dependiendo de tu BlockBuilder.
+        Si BlockBuilder pide str, convertimos aquí.
+        """
+        # Corrección del error de tipo (Screenshot 1):
+        # Convertimos a str explícitamente si BlockBuilder lo requiere estrictamente.
+        return BlockBuilder.build(index, transactions, prev_hash, str(bits))
 
     async def start_mining(self):
         if self._mining_task and not self._mining_task.done():
@@ -79,90 +57,113 @@ class MiningManager(IMinerRole):
 
     async def stop_mining(self):
         if self._mining_task:
-            logging.info("Deteniendo servicio de minería...")
             self._mining_task.cancel()
             try:
                 await self._mining_task
             except asyncio.CancelledError:
                 pass
             self._mining_task = None
-            logging.info("Servicio de minería detenido.")
+            self._executor.shutdown(wait=False)
 
-    async def _mine_loop(self, interval_seconds: int = 5):
-        logging.info("Bucle de minería activo.")
+    async def _mine_loop(self, interval_seconds: int = 2):
+        loop = asyncio.get_running_loop()
         
         while True:
-            await asyncio.sleep(interval_seconds)
-            
-            mempool = self._full_node.get_mempool()
-            
-            if mempool.get_transaction_count() == 0:
-                logging.debug("Mineria: Mempool vacío, esperando transacciones...")
-                continue
-
             try:
-                logging.info("Mineria: Trabajando en nuevo bloque...")
+                await asyncio.sleep(interval_seconds)
                 
-                new_block = self.create_new_block()
+                # USANDO GETTER (Requiere Paso 1)
+                mempool = self._full_node.get_mempool()
                 
+                if mempool.get_transaction_count() == 0:
+                    continue
+
+                logging.info("🔨 MINERIA: Preparando bloque...")
+                
+                block_params = self._prepare_block_params()
+                
+                # Ejecución en paralelo
+                new_block = await loop.run_in_executor(
+                    self._executor, 
+                    self.create_new_block, # Llamamos a nuestro método wrapper que corrige los tipos
+                    *block_params 
+                )
+                
+                logging.info(f"💎 Bloque {new_block.index} minado.")
+                
+                # --- CORRECCIÓN DEL ACCESO A FULLNODE (Screenshot 2) ---
+                
+                # 1. Validación (Usando Getter)
                 validation_manager = self._full_node.get_validation_manager()
                 
                 if validation_manager.validate_block_rules(new_block):
-                    logging.info(f"Mineria: ¡Bloque {new_block.index} MINADO y validado!")
                     
+                    # 2. Propagación (Usando Getter y quitando await si no es async)
                     p2p_manager = self._full_node.get_p2p_manager()
-                    p2p_manager.broadcast_new_block(new_block)
-                else:
-                    logging.error("Mineria: Bloque generado fue rechazado por reglas internas (¿Cambió la cadena mientras minábamos?).")
                     
+                    # Verificamos si es asíncrono o síncrono para evitar error "None is not awaitable"
+                    if asyncio.iscoroutinefunction(p2p_manager.broadcast_new_block):
+                        await p2p_manager.broadcast_new_block(new_block)
+                    else:
+                        p2p_manager.broadcast_new_block(new_block)
+                    
+                    # 3. Consenso (Usando Getter corregido)
+                    consensus_manager = self._full_node.get_consensus_manager()
+                    
+                    # Asumiendo que ValidationManager tiene el mapa de claves público o un getter
+                    # Si _public_key_map es protegido, lo ideal es añadir get_public_key_map() en ValidationManager también.
+                    # Por ahora accedemos así para desbloquearte:
+                    consensus_manager.add_block(new_block, validation_manager._public_key_map)
+                    
+                else:
+                    logging.error("Mineria: Bloque rechazado.")
+                    
+            except asyncio.CancelledError:
+                break
             except Exception as e:
-                logging.error(f"Mineria: Error crítico en bucle: {e}", exc_info=True)
+                logging.error(f"Error mineria: {e}")
+                await asyncio.sleep(5)
 
-    # --- Implementación del Rol (Lógica de Creación con Núcleo Estático) ---
-
-    def create_new_block(self) -> Block:
+    def _prepare_block_params(self):
         coinbase_tx = self._create_coinbase_tx()
-        
         mempool = self._full_node.get_mempool()
-        mempool_txs = mempool.get_transactions_for_block(max_count=10)
-        transactions = [coinbase_tx] + mempool_txs
+        transactions = [coinbase_tx] + mempool.get_transactions_for_block(50)
         
         blockchain = self._full_node.get_blockchain()
         last_block = blockchain.last_block
         index = (last_block.index + 1) if last_block else 0
-        prev_hash = last_block.hash if last_block else None
+        prev_hash = last_block.hash if last_block else "0"*64 
 
+        # Obtenemos bits como entero
         bits = last_block.bits if last_block else DifficultyUtils.target_to_bits(DifficultyUtils.MAX_TARGET)
         
         if DifficultyAdjuster.should_adjust(index) and last_block:
             try:
-                prev_adj_index = index - DifficultyAdjuster.ADJUSTMENT_INTERVAL_BLOCKS
-                prev_adj_block = blockchain.chain[prev_adj_index]
-                bits = DifficultyAdjuster.calculate_new_bits(prev_adj_block, last_block)
-            except (IndexError, ValueError):
+                prev_adj = index - Config.DIFFICULTY_ADJUSTMENT_INTERVAL
+                if prev_adj >= 0:
+                    # Asegúrate de acceder a la lista interna o método getter de blockchain
+                    prev_block = blockchain.chain[prev_adj] 
+                    bits = DifficultyAdjuster.calculate_new_bits(prev_block, last_block)
+            except:
                 pass 
 
-        return BlockBuilder.build(index, transactions, prev_hash, bits)
+        # Retornamos bits. create_new_block se encargará de convertirlo a str si es necesario.
+        return (index, transactions, prev_hash, bits)
 
     def _create_coinbase_tx(self) -> Transaction:
         blockchain = self._full_node.get_blockchain()
-        current_height = blockchain.chain[-1].index if blockchain.chain else 0
+        last_block = blockchain.last_block
+        idx = last_block.index + 1 if last_block else 0
         
         params_data = DataEntryCreationParams(
             source_id=self._miner_address,
             data_type='coinbase',
-            value=f'Mined Block {current_height + 1}'.encode('utf-8'),
-            nonce=0
+            value=f'Block {idx}'.encode(),
+            nonce=int(time.time())
         )
         entry = DataEntryFactory.create(params_data)
-        
         tx_size = TransactionUtils.calculate_data_size([entry])
         
-        params_tx = TransactionCreationParams(
-            entries=[entry],
-            timestamp=time.time(),
-            fee=0,
-            size_bytes=tx_size,
-            fee_rate=0.0
-        )
-        return TransactionFactory.create(params_tx)
+        return TransactionFactory.create(TransactionCreationParams(
+            entries=[entry], timestamp=time.time(), fee=0, size_bytes=tx_size, fee_rate=0.0
+        ))

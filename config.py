@@ -1,27 +1,39 @@
-# config.py
-
+# network_of_interactive_nodes/core/config.py
 '''
-Archivo de Configuración Central para la Blockchain.
+class Config:
+    Centraliza TODAS las constantes y políticas de la red.
+    
+    Beneficio: Permite ajustar la red (ej. hacerla más rápida para demos) 
+    sin tocar el código fuente de los servicios.
 '''
 
-# --- CONFIGURACIÓN DE LA RED ---
-DEFAULT_PORT = 5001
-# Lista de nodos pares iniciales con los que intentar conectar
-PEERS: list[str] = list()
+class Config:
+    # --- RED P2P (Network) ---
+    # Límite de seguridad anti-DoS (2 MB)
+    NETWORK_MAX_PAYLOAD_SIZE: int = 2 * 1024 * 1024 
+    # Puerto por defecto si no se especifica
+    NETWORK_DEFAULT_PORT: int = 8000
+    # Tiempo de espera al iniciar para conectar seeds
+    NETWORK_STARTUP_DELAY: int = 2
 
-# --- CONFIGURACIÓN DE PERSISTENCIA ---
-BLOCKCHAIN_FILE: str = 'blockchain_data.json'
+    # --- CONSENSO (Consensus) ---
+    # Versión del protocolo
+    PROTOCOL_VERSION: int = 1
+    # Ajuste de dificultad: Tiempo esperado por bloque (60 segundos)
+    # Tip: Bájalo a 10 segundos para demos en clase.
+    BLOCK_TIME_TARGET_SEC: int = 60 
+    # Cada cuántos bloques se recalcula la dificultad (10 bloques)
+    DIFFICULTY_ADJUSTMENT_INTERVAL: int = 10
+    
+    # --- VALIDACIÓN (Validation) ---
+    # Tolerancia de tiempo futuro para bloques (2 horas)
+    BLOCK_MAX_FUTURE_TIME_SEC: int = 7200 
 
-# --- CONFIGURACIÓN DEL CONSENSO (PROOF OF WORK) ---
-# Dificultad inicial de la red
-INITIAL_DIFFICULTY: int = 4
+    # --- MEMPOOL (Memory Pool) ---
+    # Tiempo de vida de una transacción en memoria (14 días)
+    MEMPOOL_EXPIRY_SEC: int = 14 * 24 * 60 * 60 
+    # Límite de transacciones en mempool (Protección DoS adicional)
+    MEMPOOL_MAX_SIZE: int = 50000
 
-# --- CONFIGURACIÓN DEL AJUSTE DE DIFICULTAD ---
-# Cada cuántos bloques se debe reajustar la dificultad
-DIFFICULTY_ADJUSTMENT_INTERVAL: int = 10
-
-# El tiempo esperado para minar UN bloque
-EXPECTED_BLOCK_TIME_SECONDS: int = 30  # segundos
-
-# El tiempo total esperado para minar el intervalo completo de bloques
-EXPECTED_INTERVAL_TIME: int = DIFFICULTY_ADJUSTMENT_INTERVAL * EXPECTED_BLOCK_TIME_SECONDS
+    # Factor de amortiguación para evitar cambios bruscos de dificultad (4x)
+    DIFFICULTY_CLAMP_FACTOR: int = 4

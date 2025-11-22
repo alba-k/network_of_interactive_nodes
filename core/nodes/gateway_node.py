@@ -1,4 +1,4 @@
-# core/nodes/gateway_node.py
+# network_of_interactive_nodes/core/nodes/gateway_node.py
 '''
 class GatewayNode:
     Fachada (Facade) que representa el rol de API Gateway y Wallet en la red.
@@ -15,16 +15,11 @@ class GatewayNode:
         _full_node (FullNode): Nodo base.
         _signer (SoftwareSigner): Adaptador de firma local.
         _wallet_manager (WalletManager): Gestor de identidad.
-        _api_manager (APIManager): Servidor Web (FastAPI).
-
-    Methods:
-        start(): Inicia FullNode y luego el API.
-        stop(): Detiene API y luego el FullNode.
-        get_...(): Getters para acceder a los subsistemas.
+        _api_manager (APIManager): Servidor Web (FastAPI/Flask).
 '''
 
 import logging
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional
 from Crypto.PublicKey.ECC import EccKey
 
 # --- Importaciones de Componentes y Gestores ---
@@ -37,6 +32,9 @@ from core.client_services.software_signer import SoftwareSigner
 from core.models.blockchain import Blockchain
 from core.mempool.mempool import Mempool
 from core.consensus.consensus_manager import ConsensusManager
+
+# --- Importación de Persistencia (Tipado Estricto) ---
+from core.managers.persistence_manager import PersistenceManager
 
 class GatewayNode:
 
@@ -51,11 +49,13 @@ class GatewayNode:
                  api_host: str = "0.0.0.0", 
                  api_port: int = 8000,
                  seed_peers: Optional[List[Tuple[str, int]]] = None,
-                 persistence_manager: Any = None):
+                 # [FIX] Tipado estricto
+                 persistence_manager: Optional[PersistenceManager] = None):
         
         logging.info("Inicializando Gateway Node...")
 
         # 1. Instanciar el FullNode (El Motor P2P y de Validación)
+        # Le pasamos el persistence_manager para que cargue la cadena al iniciar.
         self._full_node = FullNode(
             blockchain=blockchain,
             consensus_manager=consensus_manager,
@@ -91,10 +91,10 @@ class GatewayNode:
     async def start(self) -> None:
         logging.info(">>> ARRANCANDO GATEWAY NODE <<<")
         
-        # 1. Arrancar el FullNode (Inicia Red P2P y Persistencia)
+        # 1. Arrancar el FullNode (Inicia Red P2P y carga Persistencia)
         await self._full_node.start()
         
-        # 2. Arrancar el Servidor API (Asíncrono)
+        # 2. Arrancar el Servidor API (Asíncrono/Threaded según implementación interna)
         self._api_manager.start_api_server()
         
         logging.info(">>> GATEWAY NODE OPERATIVO <<<")

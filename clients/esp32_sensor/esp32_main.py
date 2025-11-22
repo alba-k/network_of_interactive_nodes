@@ -57,6 +57,8 @@ class ESP32Client(BaseClient):
             # 4. Dormir (Simulación de Deep Sleep para ahorro de batería).
             time.sleep(5)
 
+            
+
 if __name__ == "__main__":
     # Inicializar el cliente con su identidad única
     client = ESP32Client(key_file="sensor_key.pem")
