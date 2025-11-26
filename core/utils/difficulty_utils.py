@@ -1,5 +1,6 @@
-# network_of_interactive_nodes/core/utils/difficulty_utils.py
 '''
+# network_of_interactive_nodes/core/utils/difficulty_utils.py
+''
 class DifficultyUtils:
     Contiene la lógica "helper" (de utilidad) pura para manejar la dificultad (Bits y Target).
     
@@ -18,7 +19,7 @@ class DifficultyUtils:
             3. La 'mant' (mantisa) son los primeros 3 bytes
             4. Manejar desbordamiento (si los primeros 3 bytes son demasiado grandes)
             5. Formatear como hex string
-'''
+''
 
 class DifficultyUtils:
 
@@ -58,6 +59,55 @@ class DifficultyUtils:
         mant_int = int.from_bytes(mant_bytes, 'big')
         if mant_int & 0x800000:
             mant_bytes = b'\x00' + mant_bytes[:2] # Desplazar a la derecha
+            exp += 1
+
+        mant_hex = mant_bytes.hex().zfill(6)
+        exp_hex = f'{exp:02x}'
+        
+        return f'{exp_hex}{mant_hex}'
+        '''
+# core/utils/difficulty_utils.py
+'''
+class DifficultyUtils:
+    Modo DEMO ACTIVADO: Dificultad extremadamente baja para minar en segundos.
+'''
+
+class DifficultyUtils:
+
+    # --- CAMBIO CRÍTICO: MODO DEMO ---
+    # Antes: 0x00FFFF... (Difícil)
+    # Ahora: 0xFFFFFF... (Muy Fácil - Acepta casi todo)
+    MAX_TARGET: int = 0xFFFFFF0000000000000000000000000000000000000000000000000000000000
+
+    @staticmethod
+    def bits_to_target(bits: str) -> int:
+        try:
+            exp = int(bits[:2], 16)
+            mant = int(bits[2:], 16)
+            target = mant * (1 << (8 * (exp - 3)))
+            return target
+        except (ValueError, TypeError):
+            # Si hay error, devolvemos la dificultad más fácil para no trabar la demo
+            return DifficultyUtils.MAX_TARGET
+
+    @staticmethod
+    def target_to_bits(target: int) -> str:
+        if target < 0:
+            raise ValueError('Target no puede ser negativo.')
+        if target == 0:
+            return '00000000'
+
+        target_bytes = target.to_bytes((target.bit_length() + 7) // 8, 'big')
+        exp = len(target_bytes)
+         
+        if exp > 3:
+            mant_bytes = target_bytes[:3]
+        else:
+            mant_bytes = target_bytes.rjust(3, b'\x00')
+            
+        mant_int = int.from_bytes(mant_bytes, 'big')
+        if mant_int & 0x800000:
+            mant_bytes = b'\x00' + mant_bytes[:2]
             exp += 1
 
         mant_hex = mant_bytes.hex().zfill(6)

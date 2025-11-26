@@ -1,10 +1,7 @@
 # clients/esp32_sensor/esp32_main.py
 '''
 class ESP32Client(BaseClient):
-    Implementación concreta de un cliente IoT (Simulado). 
     Hereda de BaseClient para obtener la capacidad de firmar y enviar datos, y añade un bucle infinito que simula la lectura de sensores físicos.
-
-    *** ACTUALIZACIÓN: Tipado estricto y configuración de red robusta. ***
 
     Attributes:
         (Heredados de BaseClient): _builder, _gateway_url.
@@ -23,14 +20,12 @@ import sys
 import os
 import logging
 
-# 1. Configuración de Imports (Añadir raíz del proyecto al path de forma robusta)
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(current_dir, '../../'))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
 # Importación del Cliente Base
-# (Asumimos que BaseClient ya usa internamente el TransactionBuilder actualizado)
 from clients.base_client import BaseClient
 
 class ESP32Client(BaseClient):
@@ -46,7 +41,6 @@ class ESP32Client(BaseClient):
         
         while True:
             try:
-                # 1. Generar datos aleatorios (Simulación de lectura de pines GPIO).
                 temp: float = round(random.uniform(20.0, 35.0), 2)
                 hum: float = round(random.uniform(40.0, 80.0), 2)
                 

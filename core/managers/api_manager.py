@@ -1,21 +1,10 @@
-# core/managers/api_manager.py
+# core/managers/api_manager.py (VERSIÓN FINAL - CORRECCIÓN DE FIRMA IOT)
 '''
 class APIManager(IAPIRole):
-    Implementa el "Rol" de API Gateway (Servidor Web).
-    
-    Su responsabilidad es levantar un servidor FastAPI (Uvicorn) y exponer endpoints
-    que permitan al mundo exterior interactuar con la Blockchain.
-
-    Endpoints:
-        POST /submit_data: Para clientes simples. El nodo firma con su WalletManager.
-        POST /submit_signed_tx: Para clientes IoT (ESP32). El nodo solo retransmite.
-        GET /health: Estado del nodo.
-
-    Attributes:
-        _wallet_manager (WalletManager): Gestor de firma (Inyectado).
-        _full_node (FullNode): Contenedor principal (Inyectado).
-        _app (FastAPI): Aplicación web.
-        _server_task (Task): Tarea de fondo para el servidor.
+    Implementa el "Rol" de API Gateway.
+    SOLUCIÓN DE FIRMA: Cuando recibe datos de un sensor sin wallet (ESP32),
+    el Gateway firma la transacción con SU propia wallet y se registra como el 'source_id',
+    guardando el ID original del sensor en los metadatos.
 '''
 
 import logging
@@ -25,12 +14,9 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from typing import Dict, Any
 
-# Interfaces y Componentes
 from core.interfaces.i_node_roles import IAPIRole
 from core.managers.wallet_manager import WalletManager
 from core.nodes.full_node import FullNode
-
-# DTOs y Modelos
 from core.dto.api.data_submission import DataSubmission
 from core.dto.data_entry_creation_params import DataEntryCreationParams
 from core.factories.data_entry_factory import DataEntryFactory
@@ -48,21 +34,14 @@ class APIManager(IAPIRole):
         self._full_node = full_node
         self._api_host = api_host
         self._api_port = api_port
-        
         self._app = FastAPI(title="Blockchain Gateway Node")
         self._server_task: asyncio.Task[None] | None = None 
-        
         self._setup_api_routes()
-        logging.info(f'API Manager configurado. Listo para iniciar en http://{api_host}:{api_port}')
-
-    # --- Implementación de IAPIRole (Ciclo de Vida) ---
+        logging.info(f'API Manager listo en http://{api_host}:{api_port}')
 
     def start_api_server(self):
-        # Configurar Uvicorn
         config = uvicorn.Config(self._app, host=self._api_host, port=self._api_port, log_level="info")
         server = uvicorn.Server(config)
-        
-        # Iniciar en background para no bloquear el P2P
         self._server_task = asyncio.create_task(server.serve())
         logging.info(f'API Server corriendo en segundo plano.')
 
@@ -70,8 +49,6 @@ class APIManager(IAPIRole):
         if self._server_task:
             logging.info("Deteniendo API Server...")
             self._server_task.cancel()
-
-    # --- Rutas y Endpoints ---
 
     def _setup_api_routes(self):
         self._app.post('/submit_data')(self.handle_submit_data)
@@ -82,7 +59,6 @@ class APIManager(IAPIRole):
         blockchain = self._full_node.get_blockchain()
         mempool = self._full_node.get_mempool()
         last_block = blockchain.last_block
-        
         return {
             "status": "online", 
             "role": "GATEWAY",
@@ -91,63 +67,66 @@ class APIManager(IAPIRole):
             "address": self._wallet_manager.get_address()
         }
 
-    # --- Handlers (Lógica de Endpoints) ---
-
     async def handle_submit_data(self, submission: DataSubmission) -> Dict[str, Any]:
-        '''Caso 1: Cliente Web (El Nodo firma).'''
-        logging.info(f'API: Recibido dato crudo de {submission.source_id}')
+        '''Caso 1: Cliente IoT (El Gateway firma por él).'''
+        logging.info(f'API: Procesando dato de sensor: {submission.source_id}')
         try:
-            # 1. Decodificar y Crear DataEntry
+            # 1. TRUCO DE SEGURIDAD: 
+            # Usamos la dirección del Gateway como 'source_id' porque es quien tiene la llave privada.
+            signer_address = self._wallet_manager.get_address()
+
+            # 2. PRESERVAR DATOS:
+            # Guardamos el ID real del sensor en los metadatos.
+            final_metadata = submission.metadata if submission.metadata else {}
+            final_metadata['original_sensor_id'] = submission.source_id
+            final_metadata['data_type_original'] = submission.data_type
+
+            # 3. Decodificar
             value_bytes = base64.b64decode(submission.value) 
+
+            # 4. Crear DataEntry (A nombre del Gateway)
             creation_params = DataEntryCreationParams(
-                source_id=submission.source_id,
-                data_type=submission.data_type,
+                source_id=signer_address,  # <--- CAMBIO CRÍTICO AQUÍ
+                data_type="IOT_DELEGATED", # Tipo genérico para datos delegados
                 value=value_bytes, 
                 nonce=submission.nonce,
-                metadata=submission.metadata
+                metadata=final_metadata
             )
             entry = DataEntryFactory.create(params=creation_params)
             
-            # 2. FIRMAR (Usando el WalletManager del Gateway)
+            # 5. Firmar
             signed_tx = self._wallet_manager.create_and_sign_data([entry])
             
-            # 3. Validar y Propagar (Usando el FullNode)
-            is_accepted = self._full_node.get_validation_manager().validate_tx_rules(signed_tx) 
+            # 6. Validar y Propagar
+            # Ahora pasará la validación porque (Firma == Source_ID)
+            validation_manager = self._full_node.get_validation_manager()
             
-            # 4. Forzar broadcast si es válida (Doble seguridad)
-            if is_accepted:
+            if validation_manager.validate_tx_rules(signed_tx):
                 self._full_node.get_p2p_manager().broadcast_new_tx(signed_tx)
-
-            return {'status': 'broadcasted', 'tx_hash': signed_tx.tx_hash}
+                logging.info(f"✅ API: Transacción aceptada y propagada ({signed_tx.tx_hash[:8]})")
+                return {'status': 'broadcasted', 'tx_hash': signed_tx.tx_hash}
+            else:
+                logging.warning("API: Transacción rechazada por reglas de consenso internas.")
+                raise ValueError("Fallo de validación interna.")
         
         except Exception as e:
             logging.error(f'API Error: {e}')
             raise HTTPException(status_code=400, detail=str(e))
 
     async def handle_submit_signed_tx(self, submission: Dict[str, Any]) -> Dict[str, Any]:
-        '''Caso 2: Cliente IoT (Ya viene firmado).'''
-        logging.info(f'API: Recibida TX firmada externamente.')
+        '''Caso 2: Cliente IoT Avanzado (Ya viene firmado).'''
         try:
             tx_data = submission.get('tx_data')
-            if not tx_data:
-                raise ValueError("Falta 'tx_data' en el cuerpo del request.")
+            if not tx_data: raise ValueError("Falta 'tx_data'.")
 
-            # 1. Reconstruir la transacción (Deserializar)
-            #    Aquí usamos el Núcleo Estático para convertir JSON -> Objeto
             tx_obj = TransactionDeserializer.from_dict(tx_data)
-
-            # 2. Validar Reglas y Firmas (Usando el FullNode)
-            #    Esto verifica criptográficamente que el ESP32 firmó bien.
             validation_manager = self._full_node.get_validation_manager()
-            is_valid = validation_manager.validate_tx_rules(tx_obj)
-
-            if is_valid:
-                # 3. Propagar a la red P2P
+            
+            if validation_manager.validate_tx_rules(tx_obj):
                 self._full_node.get_p2p_manager().broadcast_new_tx(tx_obj)
                 return {'status': 'relayed', 'tx_hash': tx_obj.tx_hash}
             else:
-                raise ValueError("TX rechazada: Firma inválida o duplicada.")
-
+                raise ValueError("Firma inválida.")
         except Exception as e:
             logging.error(f'API Relay Error: {e}')
             raise HTTPException(status_code=400, detail=str(e))
