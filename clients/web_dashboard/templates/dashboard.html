@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <title>Nodo Interactivo IoT</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        .block-card {
+            border-left: 5px solid #28a745;
+            transition: 0.3s;
+        }
+
+        .iot-card {
+            border-left: 5px solid #17a2b8;
+        }
+
+        .mining-active {
+            animation: pulse-gold 2s infinite;
+            color: #ffc107;
+        }
+
+        @keyframes pulse-gold {
+            0% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+
+            100% {
+                opacity: 1;
+            }
+        }
+    </style>
+</head>
+
+<body class="bg-light">
+
+    <nav class="navbar navbar-dark bg-dark mb-4 shadow">
+        <div class="container-fluid">
+            <span class="navbar-brand mb-0 h1"><i class="fas fa-network-wired"></i> Red Distribuida</span>
+            <div class="text-end text-white">
+                <span id="nodeRole" class="badge bg-secondary">Detectando...</span>
+                <span id="peerBadge" class="badge bg-primary ms-2"><i class="fas fa-users"></i> 0 Peers</span>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid px-4">
+        <div class="row">
+            <div class="col-md-4 mb-3">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-success text-white d-flex justify-content-between">
+                        <span><i class="fas fa-cubes"></i> Cadena de Bloques</span>
+                        <span id="chainHeight" class="badge bg-light text-dark">#0</span>
+                    </div>
+                    <div class="card-body p-0 bg-white" id="chainContainer"
+                        style="max-height: 500px; overflow-y: auto;">
+                        <div class="text-center p-4 text-muted">Esperando bloques...</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-4 mb-3">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-info text-white d-flex justify-content-between">
+                        <span><i class="fas fa-microchip"></i> Datos IoT (Mempool)</span>
+                        <span id="mempoolCount" class="badge bg-light text-dark">0</span>
+                    </div>
+                    <div class="card-body p-0 bg-white" id="mempoolContainer"
+                        style="max-height: 500px; overflow-y: auto;">
+                        <div class="text-center p-4 text-muted">Esperando datos del sensor...</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-4 mb-3">
+                <div class="card shadow-sm mb-3">
+                    <div class="card-body text-center">
+                        <h5 class="card-title text-muted">Estado del Consenso (PoW)</h5>
+                        <div id="miningIcon" class="display-4 my-3 text-secondary"><i class="fas fa-hammer"></i></div>
+                        <h4 id="miningText">En Espera</h4>
+                        <p class="small text-muted">El nodo compite por resolver el hash.</p>
+                    </div>
+                </div>
+
+                <div class="card shadow-sm">
+                    <div class="card-header bg-white fw-bold">Enviar Datos Manualmente</div>
+                    <div class="card-body">
+                        <form id="txForm">
+                            <div class="mb-2">
+                                <select class="form-select" id="txType">
+                                    <option value="MENSAJE">Mensaje Chat</option>
+                                    <option value="ALERTA">Alerta Roja</option>
+                                </select>
+                            </div>
+                            <div class="input-group mb-3">
+                                <input type="text" class="form-control" id="txContent" placeholder="Ej: Hola Red..."
+                                    required>
+                                <button class="btn btn-primary" type="submit" id="btnSend"><i
+                                        class="fas fa-paper-plane"></i></button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- LÓGICA FRONTEND ---
+        async function updateDashboard() {
+            try {
+                // 1. Estado General y Peers
+                const statusRes = await fetch('/api/status');
+                const status = await statusRes.json();
+
+                if (status.status === 'online') {
+                    document.getElementById('nodeRole').innerText = status.role;
+                    document.getElementById('nodeRole').className = status.role === 'MINER' ? 'badge bg-warning text-dark' : 'badge bg-success';
+
+                    // Actualizar Peers (Punto 5)
+                    const peerCount = status.peers_count || 0;
+                    document.getElementById('peerBadge').innerHTML = `<i class="fas fa-users"></i> ${peerCount} Peers`;
+
+                    // Visualizar Minería (Punto 1)
+                    const miningIcon = document.getElementById('miningIcon');
+                    const miningText = document.getElementById('miningText');
+
+                    if (status.role === 'MINER' || status.role === 'FULL') {
+                        miningIcon.innerHTML = '<i class="fas fa-cog fa-spin"></i>';
+                        miningIcon.className = "display-4 my-3 mining-active";
+                        miningText.innerText = "MINANDO...";
+                    } else {
+                        miningIcon.innerHTML = '<i class="fas fa-check-circle"></i>';
+                        miningIcon.className = "display-4 my-3 text-success";
+                        miningText.innerText = "VALIDANDO";
+                    }
+                }
+
+                // 2. Blockchain (Punto 2)
+                const chainRes = await fetch('/api/chain');
+                const chain = await chainRes.json();
+                document.getElementById('chainHeight').innerText = "#" + chain.length;
+
+                let chainHtml = '';
+                if (chain.latest_blocks && chain.latest_blocks.length > 0) {
+                    chain.latest_blocks.forEach(b => {
+                        chainHtml += `
+                        <div class="p-3 border-bottom block-card">
+                            <div class="d-flex justify-content-between">
+                                <strong>Bloque #${b.index}</strong>
+                                <small class="text-muted">${new Date(b.timestamp * 1000).toLocaleTimeString()}</small>
+                            </div>
+                            <div class="small text-truncate text-muted mt-1">Hash: ${b.hash}</div>
+                            <span class="badge bg-success mt-1">${b.tx_count} TXs</span>
+                        </div>`;
+                    });
+                    document.getElementById('chainContainer').innerHTML = chainHtml;
+                }
+
+                // 3. Mempool / IoT (Punto 4)
+                const memRes = await fetch('/api/mempool');
+                const mem = await memRes.json();
+                document.getElementById('mempoolCount').innerText = mem.count;
+
+                let memHtml = '';
+                if (mem.transactions && mem.transactions.length > 0) {
+                    mem.transactions.forEach(tx => {
+                        memHtml += `
+                        <div class="p-3 border-bottom iot-card bg-light">
+                            <div class="d-flex justify-content-between">
+                                <strong class="text-info">${tx.type}</strong>
+                                <span class="badge bg-secondary">Pendiente</span>
+                            </div>
+                            <div class="small text-truncate text-muted mt-1">Fuente: ${tx.source}</div>
+                        </div>`;
+                    });
+                    document.getElementById('mempoolContainer').innerHTML = memHtml;
+                } else {
+                    document.getElementById('mempoolContainer').innerHTML = '<div class="text-center p-4 text-muted">Mempool Vacío</div>';
+                }
+
+            } catch (e) {
+                console.error("Conexión perdida con el nodo local.");
+            }
+        }
+
+        // Envío Manual
+        document.getElementById('txForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = document.getElementById('btnSend');
+            const type = document.getElementById('txType').value;
+            const content = document.getElementById('txContent').value;
+
+            btn.disabled = true;
+            await fetch('/api/send', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ type, content })
+            });
+            document.getElementById('txContent').value = '';
+            btn.disabled = false;
+            updateDashboard();
+        });
+
+        // Refrescar cada 1.5 segundos
+        setInterval(updateDashboard, 1500);
+        updateDashboard();
+    </script>
+
+</body>
+
+</html>

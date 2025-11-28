@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Orquestador Visual Blockchain</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        body {
+            background-color: #0f172a;
+            color: #f8fafc;
+            font-family: 'Segoe UI', sans-serif;
+        }
+
+        .card-node {
+            background-color: #1e293b;
+            border: 2px solid #334155;
+            transition: all 0.3s ease;
+        }
+
+        /* EFECTOS VISUALES DE SINCRONIZACIÓN */
+        .sync-ok {
+            border-color: #22c55e !important;
+            box-shadow: 0 0 15px rgba(34, 197, 94, 0.3);
+        }
+
+        .sync-error {
+            border-color: #ef4444 !important;
+            box-shadow: 0 0 15px rgba(239, 68, 68, 0.5);
+            animation: shake 0.5s;
+        }
+
+        .sync-reorg {
+            animation: flash-green 1s;
+        }
+
+        .metric-box {
+            background: #334155;
+            border-radius: 8px;
+            padding: 10px;
+            text-align: center;
+        }
+
+        .metric-val {
+            font-size: 1.5rem;
+            font-weight: bold;
+        }
+
+        .btn-control {
+            width: 100%;
+            font-weight: bold;
+            letter-spacing: 1px;
+            margin-top: 10px;
+        }
+
+        @keyframes shake {
+            0% {
+                transform: translateX(0);
+            }
+
+            25% {
+                transform: translateX(-5px);
+            }
+
+            75% {
+                transform: translateX(5px);
+            }
+
+            100% {
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes flash-green {
+            0% {
+                background-color: #22c55e;
+            }
+
+            100% {
+                background-color: #1e293b;
+            }
+        }
+    </style>
+</head>
+
+<body class="p-4">
+
+    <div class="container">
+        <div class="d-flex justify-content-between align-items-center mb-5">
+            <h2><i class="fas fa-project-diagram text-info"></i> VISUALIZADOR DE CONSENSO</h2>
+            <div class="text-end">
+                <h4 class="mb-0 text-success">Altura Global: <span id="globalHeight">0</span></h4>
+                <small class="text-muted">Cadena Más Larga (La Verdad)</small>
+            </div>
+        </div>
+
+        <div class="row" id="nodesGrid">
+            <div class="col-12 text-center text-muted">
+                <div class="spinner-border text-info" role="status"></div>
+                <p class="mt-2">Analizando topología de red...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let previousHeights = {}; // Para detectar saltos (Reorgs)
+
+        async function updateDashboard() {
+            try {
+                const res = await fetch('/api/scan');
+                const nodes = await res.json();
+
+                // 1. Calcular la Cadena Más Larga (Consenso)
+                const activeNodes = nodes.filter(n => n.online);
+                const maxHeight = activeNodes.length > 0 ? Math.max(...activeNodes.map(n => n.height)) : 0;
+
+                document.getElementById('globalHeight').innerText = "#" + maxHeight;
+
+                const grid = document.getElementById('nodesGrid');
+                grid.innerHTML = nodes.map(node => {
+                    const isOnline = node.online;
+                    const height = node.height || 0;
+
+                    // Lógica Visual
+                    let statusClass = '';
+                    let statusMsg = '';
+                    let icon = '';
+
+                    if (isOnline) {
+                        if (height < maxHeight) {
+                            // DETECCIÓN DE FORK (ROJO)
+                            statusClass = 'sync-error';
+                            statusMsg = `⚠️ DESINCRONIZADO (-${maxHeight - height})`;
+                            icon = '<i class="fas fa-exclamation-triangle text-danger"></i>';
+                        } else {
+                            // SINCRONIZADO (VERDE)
+                            statusClass = 'sync-ok';
+                            statusMsg = '✅ SINCRONIZADO';
+                            icon = '<i class="fas fa-link text-success"></i>';
+
+                            // Detectar REORG (Flash Verde si salta altura)
+                            if (previousHeights[node.name] && (height - previousHeights[node.name] > 1)) {
+                                statusClass += ' sync-reorg';
+                            }
+                        }
+                        previousHeights[node.name] = height;
+                    } else {
+                        statusClass = 'border-secondary opacity-50';
+                    }
+
+                    // Renderizar Tarjeta
+                    return `
+                <div class="col-md-6 mb-4">
+                    <div class="card card-node h-100 ${statusClass}">
+                        <div class="card-header d-flex justify-content-between align-items-center bg-transparent border-0">
+                            <h5 class="mb-0 text-white">
+                                <i class="fas ${node.name.includes('PC') ? 'fa-desktop' : 'fa-mobile-alt'}"></i> ${node.name}
+                            </h5>
+                            <span class="badge ${node.role === 'MINER' ? 'bg-warning text-dark' : 'bg-primary'}">
+                                ${node.role}
+                            </span>
+                        </div>
+                        <div class="card-body">
+                            <div class="text-center mb-3 text-white">
+                                ${icon} <small>${statusMsg}</small>
+                            </div>
+                            
+                            <div class="row g-2 mb-3">
+                                <div class="col-4">
+                                    <div class="metric-box">
+                                        <div class="metric-val ${height < maxHeight ? 'text-danger' : 'text-success'}">#${height}</div>
+                                        <small>Altura</small>
+                                    </div>
+                                </div>
+                                <div class="col-4">
+                                    <div class="metric-box">
+                                        <div class="metric-val text-warning">${node.mempool}</div>
+                                        <small>Mempool</small>
+                                    </div>
+                                </div>
+                                <div class="col-4">
+                                    <div class="metric-box">
+                                        <div class="metric-val text-info">${node.peers}</div>
+                                        <small>Peers</small>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="d-grid">
+                                ${isOnline ? `
+                                    ${node.role !== 'MINER' ?
+                                `<button onclick="cmd('${node.url}', 'start')" class="btn btn-outline-success btn-control"><i class="fas fa-play"></i> ACTIVAR MINERÍA</button>` :
+                                `<button onclick="cmd('${node.url}', 'stop')" class="btn btn-outline-danger btn-control"><i class="fas fa-stop"></i> DETENER MINERÍA</button>`}
+                                ` : '<div class="alert alert-dark text-center py-1">OFFLINE</div>'}
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+                }).join('');
+
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function cmd(url, action) {
+            // Feedback visual
+            document.body.style.cursor = 'wait';
+            await fetch('/api/control', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url, action })
+            });
+            document.body.style.cursor = 'default';
+            setTimeout(updateDashboard, 500); // Recarga rápida
+        }
+
+        setInterval(updateDashboard, 1000);
+        updateDashboard();
+    </script>
+</body>
+
+</html>

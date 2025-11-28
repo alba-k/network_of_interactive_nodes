@@ -1,20 +1,12 @@
-# core/managers/mining_manager.py (VERSIÓN FINAL - SOLUCIÓN MIXTA)
-
 import logging
 import asyncio
 import time
 from typing import Optional, List, Any
 from concurrent.futures import ProcessPoolExecutor
-
-# Interfaces 
 from core.interfaces.i_node_roles import IMinerRole
-
-# Modelos y Nodo 
 from core.nodes.full_node import FullNode
 from core.models.transaction import Transaction
 from core.models.block import Block 
-
-# Núcleo Estático 
 from core.builders.block_builder import BlockBuilder
 from core.factories.transaction_factory import TransactionFactory
 from core.factories.data_entry_factory import DataEntryFactory
@@ -23,17 +15,10 @@ from core.utils.difficulty_utils import DifficultyUtils
 from core.utils.transaction_utils import TransactionUtils
 from core.dto.transaction_creation_params import TransactionCreationParams
 from core.dto.data_entry_creation_params import DataEntryCreationParams
-
-# Configuración
 from config import Config
 
-# --- [SOLUCIÓN] FUNCIÓN "WORKER" EXTERNA ---
-# Esta función vive fuera de la clase. Al no estar atada a "self",
-# Python puede enviarla a otro núcleo del procesador sin problemas de "Pickle/Lock".
 def _run_mining_logic(index: int, transactions: List[Transaction], prev_hash: str, bits: Any) -> Block:
-    # Convertimos bits a string por seguridad
     return BlockBuilder.build(index, transactions, prev_hash, str(bits))
-
 
 class MiningManager(IMinerRole):
 
@@ -44,9 +29,6 @@ class MiningManager(IMinerRole):
         self._executor = ProcessPoolExecutor(max_workers=1)
         logging.info("Mining Manager (Multiprocess) preparado.")
 
-    # --- IMPLEMENTACIÓN DE IMinerRole ---
-    # Volvemos a ponerlo como método normal (con self) para que la interfaz no se queje.
-    # Pero internamente solo delega a la función externa.
     def create_new_block(self, index: int, transactions: List[Transaction], prev_hash: str, bits: Any) -> Block:
         return _run_mining_logic(index, transactions, prev_hash, bits)
 
@@ -69,47 +51,25 @@ class MiningManager(IMinerRole):
     async def _mine_loop(self, interval_seconds: int = 2):
         logging.info("Bucle de minería activo.")
         loop = asyncio.get_running_loop()
-        
         while True:
             try:
                 await asyncio.sleep(interval_seconds)
-                
                 mempool = self._full_node.get_mempool()
-                if mempool.get_transaction_count() == 0:
-                    continue
-
+                if mempool.get_transaction_count() == 0: continue
                 logging.info("🔨 MINERIA: Preparando nuevo bloque...")
-                
-                # Preparar datos
                 block_params = self._prepare_block_params()
-                
-                # [CORRECCIÓN] Aquí enviamos la función EXTERNA (_run_mining_logic) al otro núcleo.
-                # Esto evita el error de 'pickle lock' y el error de interfaz al mismo tiempo.
-                new_block = await loop.run_in_executor(
-                    self._executor, 
-                    _run_mining_logic, 
-                    *block_params 
-                )
-                
+                new_block = await loop.run_in_executor(self._executor, _run_mining_logic, *block_params)
                 logging.info(f"💎 ¡EUREKA! Bloque {new_block.index} minado. Hash: {new_block.hash[:8]}")
-                
                 validation_manager = self._full_node.get_validation_manager()
                 if validation_manager.validate_block_rules(new_block):
                     p2p_manager = self._full_node.get_p2p_manager()
-                    
-                    if asyncio.iscoroutinefunction(p2p_manager.broadcast_new_block):
-                        await p2p_manager.broadcast_new_block(new_block)
-                    else:
-                        p2p_manager.broadcast_new_block(new_block)
-                    
+                    if asyncio.iscoroutinefunction(p2p_manager.broadcast_new_block): await p2p_manager.broadcast_new_block(new_block)
+                    else: p2p_manager.broadcast_new_block(new_block)
                     consensus_manager = self._full_node.get_consensus_manager()
                     pub_key_map = validation_manager.get_public_key_map()
                     consensus_manager.add_block(new_block, pub_key_map)
-                else:
-                    logging.error("Mineria: Bloque generado rechazado.")
-                    
-            except asyncio.CancelledError:
-                break
+                else: logging.error("Mineria: Bloque generado rechazado.")
+            except asyncio.CancelledError: break
             except Exception as e:
                 logging.error(f"Mineria: Error en bucle: {e}")
                 await asyncio.sleep(5)
@@ -119,18 +79,12 @@ class MiningManager(IMinerRole):
         mempool = self._full_node.get_mempool()
         mempool_txs = list(mempool.get_transactions_for_block(max_count=50))
         transactions = [coinbase_tx] + mempool_txs
-        
         blockchain = self._full_node.get_blockchain()
         last_block = blockchain.last_block
-        
         index = (last_block.index + 1) if last_block else 0
         prev_hash = last_block.hash if last_block else "0"*64 
-
-        if last_block:
-            bits = last_block.bits
-        else:
-            bits = DifficultyUtils.target_to_bits(DifficultyUtils.MAX_TARGET)
-        
+        if last_block: bits = last_block.bits
+        else: bits = DifficultyUtils.target_to_bits(DifficultyUtils.MAX_TARGET)
         if DifficultyAdjuster.should_adjust(index) and last_block:
             try:
                 prev_adj_index = index - Config.DIFFICULTY_ADJUSTMENT_INTERVAL
@@ -138,29 +92,18 @@ class MiningManager(IMinerRole):
                     prev_adj_block = blockchain.chain[prev_adj_index]
                     bits = DifficultyAdjuster.calculate_new_bits(prev_adj_block, last_block)
             except Exception: pass 
-
         return (index, transactions, prev_hash, bits)
 
     def _create_coinbase_tx(self) -> Transaction:
         blockchain = self._full_node.get_blockchain()
         last_block = blockchain.last_block
         current_height = last_block.index if last_block else -1
-        
-        params_data = DataEntryCreationParams(
-            source_id=self._miner_address,
-            data_type='coinbase',
-            value=f'Mined Block {current_height + 1}'.encode('utf-8'),
-            nonce=int(time.time())
-        )
+        params_data = DataEntryCreationParams(source_id=self._miner_address, data_type='coinbase', value=f'Mined Block {current_height + 1}'.encode('utf-8'), nonce=int(time.time()))
         entry = DataEntryFactory.create(params_data)
-        
         tx_size = TransactionUtils.calculate_data_size([entry])
-        
-        params_tx = TransactionCreationParams(
-            entries=[entry],
-            timestamp=time.time(),
-            fee=0,
-            size_bytes=tx_size,
-            fee_rate=0.0
-        )
+        params_tx = TransactionCreationParams(entries=[entry], timestamp=time.time(), fee=0, size_bytes=tx_size, fee_rate=0.0)
         return TransactionFactory.create(params_tx)
+
+    def is_mining_active(self) -> bool:
+        if self._mining_task and not self._mining_task.done(): return True
+        return False
