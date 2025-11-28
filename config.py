@@ -46,7 +46,7 @@ class Config:
 
 class Config:
     # --- RED P2P ---
-    NETWORK_MAX_PAYLOAD_SIZE: int = 2 * 1024 * 1024 
+    NETWORK_MAX_PAYLOAD_SIZE: int = 100 * 1024 * 1024 
     NETWORK_DEFAULT_PORT: int = 8000
     NETWORK_STARTUP_DELAY: int = 2
 

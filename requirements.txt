@@ -1,34 +1,21 @@
-# Lista de dependencias externas requeridas para el proyecto BlockCore Validator.
-
 # --- 1. Criptografía y Seguridad (Core) ---
-# Algoritmo de Firma Digital de Curva Elíptica (ECDSA)
 ecdsa==0.18.0
-# Biblioteca criptográfica completa (incluye SHA3/Keccak, reemplaza a pysha3)
 pycryptodome==3.20.0
 
 # --- 2. Capa de Red (API REST y P2P) ---
-# Micro-framework web para la API REST del Nodo
 Flask==2.3.3
-# Para validación de datos en la API (DTOs)
 pydantic==2.8.2
-# Cliente HTTP para comunicación P2P entre nodos
 requests==2.31.0
-# Servidor WSGI de producción compatible con Windows
 waitress==2.1.2
 
 # --- 3. Utilidades de Desarrollo ---
-# Para cargar variables de entorno (configuración) desde un archivo .env
 python-dotenv==1.0.0
-# Para crear una interfaz de línea de comandos (CLI) limpia
 click==8.1.7
 
 # --- 4. Pruebas (Testing) ---
-# Framework para pruebas unitarias y de integración
 pytest==7.4.2
-# Herramienta para medir la cobertura de las pruebas
 pytest-cov==4.1.0
 
 mnemonic==0.21
-
 fastapi==0.103.0
 uvicorn==0.23.2

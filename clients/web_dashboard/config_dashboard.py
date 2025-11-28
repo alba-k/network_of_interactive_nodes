@@ -1,8 +1,6 @@
-# clients/web_dashboard/config_dashboard.py
-
+# clients/web_dashboard/config_dashboard.py (En el móvil)
 class DashboardConfig:
-    # CAMBIO: Ahora apuntamos al puerto 8001
-    GATEWAY_API_URL = "http://127.0.0.1:8001" 
-    
-    WEB_PORT = 5000
-    DASHBOARD_ID = "PC-Visor"
+    # Apunta a la API del Líder (PC 1)
+    GATEWAY_API_URL = "http://192.168.0.5:8000" 
+    WEB_PORT = 5000 
+    # ...
